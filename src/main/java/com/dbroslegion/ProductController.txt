@@ -1,0 +1,398 @@
+package com.futrena.restws.controller;
+
+import com.futrena.restws.models.*;
+import com.futrena.restws.request.FullProductRequest;
+import com.futrena.restws.request.ProductID;
+import com.futrena.restws.request.ProductRequest;
+import com.futrena.restws.request.TaxRequest2;
+import com.futrena.restws.response.ResponseMessage;
+import com.futrena.restws.services.DaoServices;
+import com.futrena.restws.services.PaymentServices;
+
+import org.apache.log4j.Logger;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.mail.javamail.JavaMailSender;
+import org.springframework.mail.javamail.MimeMessageHelper;
+import org.springframework.security.access.annotation.Secured;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.*;
+
+import javax.mail.internet.MimeMessage;
+import javax.servlet.http.HttpServletRequest;
+
+
+@RestController
+public class ProductController {
+
+	private static final Logger log = Logger.getLogger(ProductController.class);
+	
+    @Autowired
+    private ProductDao productDao;
+
+    @Autowired
+    private UserDao userDao;
+
+    @Autowired
+    private DaoServices daoServices;
+    
+    @Autowired
+    private ProductRateDao productRateDao;
+
+    @Autowired
+    private UserClicksDao userClicksDao;
+
+    @Autowired
+    private PaymentServices paymentServices;
+
+    @Autowired
+    private UserAddressDao userAddressDao;
+
+
+    private final JavaMailSender javaMailSender;
+
+    @Autowired
+    ProductController(JavaMailSender javaMailSender) {
+        this.javaMailSender = javaMailSender;
+    }
+
+
+    @RequestMapping("/product/get/{productName}")
+    public List<Product> GetAllProductByName(@PathVariable String productName){
+        List<Product> p;
+        p = productDao.findAllByProductName(productName);
+        return p;
+    }
+
+    @RequestMapping("/product/{id}")
+    public Product GetProductById(@PathVariable String id){
+        Product p;
+        p = productDao.findByProductID(id);
+        return p;
+    }
+
+    @RequestMapping("/product/getByType/{type}")
+    public List<Product> GetALLProductByType(@PathVariable String type){
+        List<Product> p = productDao.findAllByProductType(type);
+        return p;
+    }
+
+    @RequestMapping("/product/getByState/{state}")
+    public List<Product> GetALLProductByState(@PathVariable String state){
+        List<Product> p = productDao.findAllByProductState(state);
+        return p;
+    }
+    
+    @RequestMapping("/product/getByDesigner/{email}")
+    public List<Product> GetByDesigner(@PathVariable String email){
+    	
+    	try{
+    		List<Product> p = productDao.findAllByDesigner(email+".com");
+    		return p;
+    	}
+    	catch(Exception ex) {
+    		log.error(ex.getMessage());
+    		ex.printStackTrace();
+    		return null;
+    	}
+    	  	
+    }
+    
+    @RequestMapping("/product/getByOwner/{email}")
+    public List<Product> GetByOwner(@PathVariable String email){
+    	
+    	try{
+    		List<Product> p = productDao.findAllByOwner(email + ".com");
+    		return p;
+    	}
+    	catch(Exception ex) {
+    		log.error(ex.getMessage());
+    		ex.printStackTrace();
+    		return null;
+    	}
+    	  	
+    }
+
+    @RequestMapping("/product/deleteById")
+    public ResponseEntity<Object> DeleteProductById(@RequestBody ProductID productId){
+        if (productDao.findByProductID(productId.getId())!=null) {
+            Product pro = productDao.findByProductID(productId.getId());
+            productDao.delete(pro);
+            ResponseMessage responseMessage = new ResponseMessage("200", "Success delete:  "+pro.getProductName());
+            return new ResponseEntity<Object>(responseMessage, HttpStatus.OK);
+        }
+        else {
+            ResponseMessage responseMessage = new ResponseMessage("404", "Product not found");
+            return new ResponseEntity<Object>(responseMessage, HttpStatus.OK);
+        }
+
+    }
+
+    @RequestMapping("/product/batchDelete")
+    public ResponseEntity<Object> BatchDelete(@RequestBody List<String> list)
+    {
+        Iterator<String> iter = list.iterator();
+
+        try{
+
+        while(iter.hasNext())
+        {
+            String productId = iter.next();
+
+            if(productDao.findByProductID(productId)!=null)
+            {
+                productDao.delete(productDao.findByProductID(productId));
+            }
+        }
+
+        }
+
+        catch (Exception ex)
+        {
+            return new ResponseEntity<Object>(null, HttpStatus.SERVICE_UNAVAILABLE);
+        }
+
+        return new ResponseEntity<Object>(list, HttpStatus.OK);
+    }
+
+
+    @RequestMapping("/product/add")
+    public ResponseEntity<Object> AddProduct(@RequestBody ProductRequest product){
+        Product p = new Product();
+        try {
+                p.setProductID(UUID.randomUUID().toString());
+                p.setProductName(product.getProductName());
+                p.setDescription(product.getDescription());
+                p.setHeight(product.getHeight());
+                p.setWidth(product.getWidth());
+                p.setLength(product.getLength());
+                p.setCreateDate(product.getCreateDate());
+                p.setMaterial(product.getProductMaterial());
+                p.setProductType(product.getProductType());
+                p.setVideoURL(product.getVideoURL());
+                p.setPrice(product.getPrice());
+                p.setTaxFlag(product.getTaxFlag());
+                p.setState("pending");
+                p.setDesigner(product.getDesigner());
+                p.setOwner(product.getOwner());
+                p.setRegular("N/A");
+                p.setImageNumber(product.getImageNumber());
+                productDao.save(p);
+
+                ProductRate _rate = new ProductRate();
+                _rate.setProductID(p.getProductID());
+                _rate.setProductName(p.getProductName());
+                _rate.setDesignerCAD(0);
+                _rate.setDesignerCNY(0);
+                _rate.setDesignerUSD(0);
+                _rate.setOwnerCAD(0);
+                _rate.setOwnerCNY(0);
+                _rate.setOwnerUSD(0);
+                _rate.setRegularCAD(0);
+                _rate.setRegularCNY(0);
+                _rate.setRegularUSD(0);
+                productRateDao.save(_rate);
+
+            }
+
+        catch (Exception ex) {
+                return new ResponseEntity<Object>(ex, HttpStatus.OK);
+            }
+
+        return new ResponseEntity<Object>(p, HttpStatus.OK);
+    }
+
+    @RequestMapping("/product/update/{id}")
+    public ResponseEntity<Object> UpdateProduct(@RequestBody ProductRequest product, @PathVariable String id){
+        Product p = productDao.findByProductID(id);
+        try {
+
+                p.setProductName(product.getProductName());
+                p.setDescription(product.getDescription());
+                p.setHeight(product.getHeight());
+                p.setWidth(product.getWidth());
+                p.setLength(product.getLength());
+                p.setCreateDate(product.getCreateDate());
+                p.setMaterial(product.getProductMaterial());
+                p.setProductType(product.getProductType());
+                p.setVideoURL(product.getVideoURL());
+                p.setState("pending");
+                productDao.save(p);
+            }
+
+        catch (Exception ex) {
+                return new ResponseEntity<Object>(ex, HttpStatus.OK);
+            }
+
+        return new ResponseEntity<Object>(p, HttpStatus.OK);
+    }
+
+    @RequestMapping("/product/fullyUpdate/{id}")
+    public ResponseEntity<Object> UpdateFullProduct(@RequestBody FullProductRequest product, @PathVariable String id){
+        Product p = productDao.findByProductID(id);
+
+        String previousState = p.getProductState();
+
+        try {
+
+            p.setProductName(product.getProductName());
+            p.setDescription(product.getDescription());
+            p.setHeight(product.getHeight());
+            p.setWidth(product.getWidth());
+            p.setLength(product.getLength());
+            p.setCreateDate(product.getCreateDate());
+            p.setMaterial(product.getMaterial());
+            p.setProductType(product.getProductType());
+            p.setVideoURL(product.getVideoURL());
+            p.setState(product.getProductState());
+            p.setDesigner(product.getDesigner());
+            p.setOwner(product.getOwner());
+            p.setRegular(product.getRegular());
+            p.setAvailableAmount(product.getAvailableAmount());
+            p.setVideoURL(product.getVideoURL());
+            p.setPrice(product.getPrice());
+            p.setTaxFlag(product.getTaxFlag());
+            p.setDeliveryFeeCA(product.getDeliveryFeeCA());
+            p.setDeliveryFeeUS(product.getDeliveryFeeUS());
+            p.setDeliveryFeeCH(product.getDeliveryFeeCH());
+            p.setImageNumber(product.getImageNumber());
+            productDao.save(p);
+        }
+
+        catch (Exception ex) {
+            return new ResponseEntity<Object>(ex, HttpStatus.OK);
+        }
+
+        String currentState =product.getProductState();
+
+        if(currentState.equals("released") || currentState!=previousState)
+        {
+            //send emails to publishers, annoucing that your pending product
+            sendConfirmEmail(p);
+        }
+
+        return new ResponseEntity<Object>(p, HttpStatus.OK);
+    }
+
+	   
+	/**
+	 * Get selected products by specifying the start index and end index. For example,
+	 * @param idxRange the index range. start from 1
+	 *        "/product/products/testing/19-27" means get the 19th- 27th testing products
+	 *        "/product/products/pending/8-17" means get the 8th- 17th pending products
+	 *        "/product/products/released/18" means get the 18th- 27th (18 + 9) released products
+	 * @return The Product list 
+	 */    
+	@RequestMapping("/product/products/{status}/{idxRange}")
+	public ResponseEntity<Object> GetSelectedProducts(@PathVariable String status, @PathVariable String idxRange) {
+		
+		return daoServices.GetSelectedProducts(status,idxRange);
+
+	}
+  
+  
+	@RequestMapping("/product/click/{email}/{productID}")
+	public void IncreaseClickNum(@PathVariable String email, @PathVariable String productID ) 
+	{
+		try{
+			productDao.IncreaseClickNum(productID);
+		
+			UserClicks userClicks = new UserClicks();
+			userClicks.setEmail(email);
+			userClicks.setCategory("product");
+			userClicks.setItemKey(productID);
+			userClicks.setMemo("click");
+			userClicks.setViewedAt(new Date());
+			
+			userClicksDao.save(userClicks);
+			
+		} catch (Exception ex) {
+			log.error(ex.getMessage());
+		}		
+	}
+
+	@RequestMapping("/product/mostviewed/{num}")
+	public  ResponseEntity<Object> GetMostViewedProduts(@PathVariable int num) 
+	{
+		List <Product> products= daoServices.findMostViewedProducts(num);
+		return new ResponseEntity<Object>( products, HttpStatus.OK );
+	}
+
+    @RequestMapping("/product/getTax/{buyerEmail}/{productId}/{addressId}")
+    public ResponseEntity<Object> GetProductTax ( @PathVariable String buyerEmail, @PathVariable String productId, @PathVariable String addressId){
+
+        try {
+
+        	if (buyerEmail == null || buyerEmail.equals("")|| buyerEmail.equalsIgnoreCase("null")) {
+        		System.out.println("Error,GetProductTax, buyerEmail==NULL");
+        	}
+
+        	if (productId == null || productId.equals("")|| productId.equalsIgnoreCase("null")) {
+        		System.out.println("Error,GetProductTax, productId==NULL");
+        	}
+        	
+        	
+        	if (addressId == null || addressId.equals("")|| addressId.equalsIgnoreCase("null")) {
+        		System.out.println("Error,GetProductTax, productId=" + productId + ";addressId==NULL");
+        	}else{
+        		System.out.println("GetProductTax, productId=" + productId + ";addressId==" + addressId + ";addressId=" +addressId);
+        	}
+        	
+        	System.out.println("buyerEmail=" + buyerEmail + ";productId=" + productId + ";addressId=" + addressId);
+        	
+            TaxRequest2 tax = paymentServices.GetTotalAmtPerProductInCart(userAddressDao.findByAddressId(addressId), productId,buyerEmail);
+
+            return new ResponseEntity<Object>(tax, HttpStatus.OK);
+
+        }
+        catch (Exception ex){
+        	System.out.println("GetProductTax, Exception=" + ex.getStackTrace());
+            return new ResponseEntity<Object>(ex, HttpStatus.OK);
+        }
+    }
+
+    public boolean sendConfirmEmail(Product product) {
+
+        boolean ret = false;
+
+        MimeMessage mimeMessage = javaMailSender.createMimeMessage();
+
+        User owner = userDao.findByEmail(product.getOwner());
+
+        try {
+            MimeMessageHelper helper = new MimeMessageHelper(mimeMessage,
+                    false, "utf-8");
+
+            String html = "";
+
+            html = "<h2><strong><span style=\"color:rgb(34, 34, 34)\">Dear "
+                    + owner.getUsername()  + "</span></strong>&nbsp;</h2></br>";
+
+            html = html + "<p>Thank you for your submission of product at FUTRENA.com</p>";
+
+            html = html + "<p>Your product: #" + product.getProductName() + " has been accepted." +
+                    "You may update information from your own console.";
+
+            html = html
+                    + "<span style=\"color:rgb(34, 34, 34)\"><br><strong>Thank you!</strong>.</span></p>";
+            html = html
+                    + "<p><span style=\"color:#0000FF\"><strong>FUTRENA TECHNOLOGY INC.</strong></span></p>";
+
+            mimeMessage.setContent(html, "text/html");
+            helper.setTo(product.getOwner());
+            helper.setSubject("Your Product has been accepted!");
+            helper.setFrom("dblitest@gmail.com");
+            javaMailSender.send(mimeMessage);
+
+            ret = true;
+
+        } catch (Exception e) {
+            System.out.println(e.getStackTrace());
+        }
+
+        return ret;
+    }
+		
+}
