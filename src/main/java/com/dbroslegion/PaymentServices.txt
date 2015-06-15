@@ -1,0 +1,1287 @@
+package com.futrena.restws.services;
+
+import com.futrena.restws.models.*;
+import com.futrena.restws.request.TaxRequest;
+import com.futrena.restws.request.TaxRequest2;
+import com.futrena.restws.utils.*;
+
+import org.apache.log4j.Logger;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.PropertySource;
+import org.springframework.mail.javamail.JavaMailSender;
+import org.springframework.mail.javamail.MimeMessageHelper;
+import org.springframework.stereotype.Service;
+
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.List;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.net.*;
+import java.text.DateFormat;
+import java.text.SimpleDateFormat;
+
+import javax.mail.internet.MimeMessage;
+import javax.persistence.EntityManager;
+import javax.persistence.PersistenceContext;
+import javax.persistence.Query;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import javax.servlet.http.HttpSession;
+
+import com.google.gson.Gson;
+
+
+/**
+ * Created by York on 15-04-28.
+ */
+
+@Service
+@PropertySource("classpath:/application.properties")
+public class PaymentServices {
+	
+	private static final Logger log = Logger.getLogger(PaymentServices.class);
+
+	@Autowired
+	private ProductDao productDao;
+	
+	@Autowired
+	private UserDao userDao;
+	
+	@Autowired
+	private ProductRateDao productRateDao;
+
+	@Autowired
+	private ShoppingCartDao shoppingCartDao;
+	
+	@PersistenceContext
+	private EntityManager  entityManager;
+
+	@Autowired
+	private TransactionHistoryDao transactionHistoryDao;
+	
+	@Autowired
+	private BuyerHistoryDao buyerHistoryDao;
+	
+	@Autowired
+	private SellerHistoryDao sellerHistoryDao;
+
+	@Autowired
+	private TaxRatioDao taxRatioDao;
+
+	@Autowired
+	private UserAddressDao userAddressDao;
+
+	private final JavaMailSender javaMailSender;
+
+	@Autowired
+	PaymentServices(JavaMailSender javaMailSender) {
+		this.javaMailSender = javaMailSender;
+	}
+	
+	@Value("${forrena.base.url}")
+	private String forrena_base_url;
+	
+	@Value("${paypal.user}")
+	private String PAYPAL_USER;
+
+	@Value("paypal.pwd}")
+	private String PAYPAL_PWD;
+
+	@Value("${paypal.signature}")
+	private String PAYPAL_SIGNATURE;
+	
+	@Value("${paypal.returnurl}")
+	private String PAYPAL_RETURNURL;
+
+	@Value("${paypal.cancelurl}")
+	private String PAYPAL_CANCELURL;
+
+	@Value("${paypal.version}")
+	private String PAYPAL_VERSION;	
+
+    
+//    /**
+//     * Add transaction record. No matter the transaction is succesfull or failed.
+//     *
+//     * @param productCartID the Shopping cart ID
+//     * @param paymentKey the Token that got from Paypal/Stripe
+//     * @param owner the Seller
+//     * @param request the HttpServletRequest. Need to keep all return contents from Stripe/Paypal
+//     * @param response the HttpServletResponse. For future function extension
+//     * @return TRUE if record added succesfully, otherwise FALSE
+//     */
+	public boolean addTransactionHistoryPostPayForStripe(String buyerEmail, String seller, float amt, String paymentKey, String transactionID, String status, HttpServletRequest request,  HttpServletResponse response ){
+		boolean ret = false;
+		List<ShoppingCart> shoppingCarts = getShoppingItemsByMerchants(buyerEmail, seller);
+
+		try {
+			float totalAmt = getAmtByMerchantsInCart( buyerEmail, seller );
+			TransactionHistory transactionHistory = new TransactionHistory();
+			transactionHistory.setProductCartID( String.valueOf(totalAmt) );
+			transactionHistory.setTransactionID( transactionID );
+			transactionHistory.setBuyer(buyerEmail );
+			transactionHistory.setTotalAmt( amt );
+			transactionHistory.setSeller( seller );
+			transactionHistory.setPayMethod( "Stripe" );
+			transactionHistory.setPaymentKey( paymentKey );	    	
+			transactionHistory.setRequest( PaypalUtil.httpRequestDump( request ) );
+			transactionHistory.setResponse( response.toString() );
+			transactionHistory.setSTATUS( status );
+			transactionHistory.setUpdated( new Date() );
+			transactionHistory.setCreated( new Date() );
+			transactionHistoryDao.save( transactionHistory );
+      	
+			ret=true;
+			
+		}catch( Exception e ) {
+			log.error( e.getMessage() );
+		}
+		
+		return ret;
+		
+	}
+
+//
+//    	/**
+//    	 * Move a shopping cart to BuyerHistory table after a succesful payment transaction.
+//    	 *
+//    	 * @param buyerEmail the Buyer
+//    	 * @param seller the Seller
+//    	 * @param processState the processState
+//    	 * @param transactionID the payment transaction ID
+//    	 * @param paymentToken the payment token for applying this payment online
+//    	 * @return TRUE if record added succesfully, otherwise FALSE
+//    	 */
+//	public boolean addBuyerHistoriesByOwnerForStripe( String buyerEmail, String seller, String processState, String transactionID, String paymentToken ) {
+//    		
+//		boolean ret=false;
+//		List<ShoppingCart> shoppingCarts = getShoppingItemsByMerchants(buyerEmail, seller);
+//    		
+//    	try{
+//    		for ( ShoppingCart shoppingCart : shoppingCarts ) {
+//    			BuyerHistory buyerHistory = new BuyerHistory();
+//    			buyerHistory.setProductCartID(shoppingCart.getProductCartID());
+//				buyerHistory.setProductID(shoppingCart.getProductID());
+//	 			buyerHistory.setProductName(shoppingCart.getProductName());
+//				buyerHistory.setBuyerEmail(shoppingCart.getBuyerEmail());
+//				buyerHistory.setCreateDate(new Date());
+//				buyerHistory.setQuantity((int)shoppingCart.getQuantity());
+//				buyerHistory.setProcessState("true");
+//				buyerHistory.setTransactionID(transactionID);
+//				buyerHistory.setPayMethod("Stripe");
+//				buyerHistory.setPaymentKey(paymentToken);
+//				
+//				buyerHistoryDao.save( buyerHistory );      
+//				shoppingCartDao.delete(shoppingCart);
+//    		}
+//
+//    		ret=true;
+//
+//    		sendEmailToBuyerAndSeller(buyerEmail, seller ) ;
+//    			
+//    	}catch(Exception e){
+//    		
+//    		log.error(e.getMessage());
+//    		
+//    	}
+//		
+//    	return ret;
+//		
+//	}
+
+    
+    public String CreatePaypalCheckoutParas (HttpServletRequest request, String buyerEmail) {
+		String paras="";		
+		HttpSession session = request.getSession(true);
+		
+    	List<ShoppingCart> shoppingCart= shoppingCartDao.findByBuyerEmail(buyerEmail);
+		String Payment_Amount=Float.toString(getAmtInCart(buyerEmail));
+		List<String> mechants = getMerchantsInCart(buyerEmail);
+		int nIndex=0;
+		String email=shoppingCart.get(0).getBuyerEmail();
+		String country=getShippingCountry(email);
+		
+		if ( mechants.size() > 6 ) {
+			return "6";
+		}
+		
+  		paras= paras + "USER=" + PAYPAL_USER;
+   		paras= paras + "&PWD=" + PAYPAL_PWD;		//# the caller account Password
+   		paras= paras + "&SIGNATURE=" + PAYPAL_SIGNATURE;	//# the caller account Signature
+   		paras= paras + "&METHOD=SetExpressCheckout";			//# API operation
+		paras= paras + "&RETURNURL=" + PAYPAL_RETURNURL + "/paypal/" + buyerEmail;	//# URL displayed to buyer after authorizing transaction
+		paras= paras + "&CANCELURL=" + PAYPAL_CANCELURL + "/paypal/cancel/" + buyerEmail;	//# URL displayed to buyer after canceling transaction
+		paras= paras + "&VERSION=" + PAYPAL_VERSION;			//# API version
+
+		float totalPayAmt=0;
+		
+		for (String mechant : mechants ) {
+			
+			String paypalAccount = getPayPalAccount( mechant );
+			if (paypalAccount.equalsIgnoreCase("")) return "-1";
+			
+			String sIndex = Integer.toString(nIndex);
+			List<Product> products=getProductsByMerchantsInCart(buyerEmail,mechant);
+			float taxRatio = 0;
+									
+			float PAYMENTREQUEST_ITEMAMT = getAmtByMerchantsInCart(buyerEmail,mechant);
+			float PAYMENTREQUEST_TAXAMT = PAYMENTREQUEST_ITEMAMT * taxRatio;
+			float PAYMENTREQUEST_INSURANCEAMT=PaypalUtil.getShippingAmt(country,products);
+			float PAYMENTREQUEST_SHIPDISCAMT=0;
+			float PAYMENTREQUEST_AMT=PAYMENTREQUEST_ITEMAMT + PAYMENTREQUEST_TAXAMT + PAYMENTREQUEST_INSURANCEAMT - PAYMENTREQUEST_SHIPDISCAMT;
+			totalPayAmt += PAYMENTREQUEST_AMT;
+			
+			String PAYMENTREQUEST_SELLERPAYPALACCOUNTID=paypalAccount;
+			String PAYMENTREQUEST_INSURANCEOPTIONOFFERED="FALSE";
+			String PAYMENTREQUEST_PAYMENTACTION="Order";
+			String PAYMENTREQUEST_PAYMENTREQUESTID=buyerEmail + "_" + "PAYMENT" + Integer.toString(nIndex);
+			String PAYMENTREQUEST_DESC =PaypalUtil.getPaymentDesc(buyerEmail, products);
+			
+			if ( PAYMENTREQUEST_AMT != 0 && !PAYMENTREQUEST_SELLERPAYPALACCOUNTID.equals("")) {
+				paras= paras + "&PAYMENTREQUEST_" + sIndex + "_CURRENCYCODE=CND";//PAYMENTREQUEST_0_CURRENCYCODE;
+				paras= paras + "&PAYMENTREQUEST_" + sIndex + "_AMT=" + PaypalUtil.float2Str(PAYMENTREQUEST_AMT);
+				paras= paras + "&PAYMENTREQUEST_" + sIndex + "_ITEMAMT=" + PaypalUtil.float2Str(PAYMENTREQUEST_ITEMAMT);
+				paras= paras + "&PAYMENTREQUEST_" + sIndex + "_TAXAMT=" + PaypalUtil.float2Str(PAYMENTREQUEST_TAXAMT);
+				paras= paras + "&PAYMENTREQUEST_" + sIndex + "_DESC=" + PAYMENTREQUEST_DESC;
+				paras= paras + "&PAYMENTREQUEST_" + sIndex + "_INSURANCEAMT=" + PaypalUtil.float2Str(PAYMENTREQUEST_INSURANCEAMT);
+				paras= paras + "&PAYMENTREQUEST_" + sIndex + "_SHIPDISCAMT=" + PaypalUtil.float2Str(PAYMENTREQUEST_SHIPDISCAMT);
+				paras= paras + "&PAYMENTREQUEST_" + sIndex + "_SELLERPAYPALACCOUNTID=" + PAYMENTREQUEST_SELLERPAYPALACCOUNTID;
+				paras= paras + "&PAYMENTREQUEST_" + sIndex + "_INSURANCEOPTIONOFFERED=" + PAYMENTREQUEST_INSURANCEOPTIONOFFERED;
+				paras= paras + "&PAYMENTREQUEST_" + sIndex + "_PAYMENTACTION=" + PAYMENTREQUEST_PAYMENTACTION;
+				paras= paras + "&PAYMENTREQUEST_" + sIndex + "_PAYMENTREQUESTID=" + PAYMENTREQUEST_PAYMENTREQUESTID;
+				nIndex=nIndex+1;
+				
+				int nIndex2 = 0;
+				for ( Product product : products ) {
+					String sIndex2 = Integer.toString(nIndex2);
+					String L_PAYMENTREQUEST_NAME=product.getProductID() + " - " + product.getProductName();
+					String L_PAYMENTREQUEST_NUMBER = product.getDescription();
+					String L_PAYMENTREQUEST_QTY=Integer.toString(getProductQuantityInCart(buyerEmail,product.getProductID()));
+					String L_PAYMENTREQUEST_DESC= product.getDescription();
+					float L_PAYMENTREQUEST_ITEMAMT=product.getPrice() * Integer.parseInt(L_PAYMENTREQUEST_QTY);
+					float L_PAYMENTREQUEST_INSURANCEAMT=PaypalUtil.getShippingAmt(country,product); //shipping fee
+					float L_PAYMENTREQUEST_SHIPDISCAMT=0;
+					float L_PAYMENTREQUEST_AMT=L_PAYMENTREQUEST_ITEMAMT  + L_PAYMENTREQUEST_INSURANCEAMT - L_PAYMENTREQUEST_SHIPDISCAMT;
+					float L_PAYMENTREQUEST_TAXAMT = L_PAYMENTREQUEST_AMT * taxRatio;
+					if (L_PAYMENTREQUEST_AMT != 0 ) {			
+						paras= paras + "&L_PAYMENTREQUEST_" + sIndex + "_NAME" + nIndex2 + "=" + L_PAYMENTREQUEST_NAME;
+						paras= paras + "&L_PAYMENTREQUEST_" + sIndex + "_NUMBER" + nIndex2 + "=" + L_PAYMENTREQUEST_NUMBER;
+						paras= paras + "&L_PAYMENTREQUEST_" + sIndex + "_QTY" + nIndex2 + "=" + L_PAYMENTREQUEST_QTY;
+						paras= paras + "&L_PAYMENTREQUEST_" + sIndex + "_TAXAMT" + nIndex2 + "=" + PaypalUtil.float2Str(L_PAYMENTREQUEST_TAXAMT);
+						paras= paras + "&L_PAYMENTREQUEST_" + sIndex + "_AMT" + nIndex2 + "=" + PaypalUtil.float2Str(L_PAYMENTREQUEST_AMT); //itemamout
+						paras= paras + "&L_PAYMENTREQUEST_" + sIndex + "_DESC" + nIndex2 + "=" + L_PAYMENTREQUEST_DESC;
+						nIndex2=nIndex2+1;
+					}
+				}
+			}			
+		}
+		
+		paras= paras + "&ALLOWNOTE=1&NOSHIPPING=1";		
+		session.setAttribute("Payment_Amount", String.valueOf(totalPayAmt)); 
+		
+		return paras;
+    }
+    
+    
+    public List<String> getMerchantsInCart(String buyerEmail){
+		String sql="";
+		
+		sql=sql + "SELECT OWNER";
+		sql=sql + " FROM product ";
+		sql=sql + " WHERE productid IN (SELECT productid FROM shopping_cart WHERE process_state=false and buyer_email='" + buyerEmail + "')";
+		sql=sql + " GROUP BY OWNER";
+		sql=sql + " ORDER BY OWNER";
+		
+		List<String> owners = new ArrayList<String>();
+		
+		Query query=this.entityManager.createNativeQuery(sql);
+		
+		@SuppressWarnings("unchecked")
+		List<String> results = query.getResultList();
+		for (String result : results) {
+			owners.add(result);			
+		}	
+		return owners;
+    }
+
+    
+    public List<Product> getProductsByMerchantsInCart(String buyerEmail, String owner){
+ 		String where=" where productid IN ";
+ 		where = where + " (SELECT productid FROM shopping_cart WHERE processState=false and buyerEmail='" + buyerEmail + "')";
+ 		where = where + " and OWNER = '" + owner + "'";
+ 		
+ 		Query query=this.entityManager.createQuery("from Product " + where); 		
+ 		List list = query.getResultList();
+ 		
+ 		return list;
+    }
+    
+    
+    public List<ShoppingCart> getShoppingItemsByMerchants(String buyerEmail, String owner){
+ 		String where=" where buyerEmail='" + buyerEmail + "'  and productid in  ";
+ 		where = where + " (SELECT productid FROM product WHERE OWNER='" +owner + "')";
+
+ 		Query query=this.entityManager.createQuery("from shopping_cart " + where); 		
+ 		List<ShoppingCart> list = query.getResultList();
+ 		
+ 		return list;
+    }    
+    
+
+    public int getProductQuantityInCart(String buyerEmail, String productid){
+    	ShoppingCart  shoppingCart = shoppingCartDao.findByBuyerEmailAndProductID(buyerEmail, productid);
+    	if (shoppingCart==null) return 0;
+    	return (int)shoppingCart.getQuantity();
+    }
+    
+    
+     public float getAmtByMerchantsInCart(String buyerEmail, String owner){
+    	float amt=0;
+    	List<Product> products=getProductsByMerchantsInCart(buyerEmail, owner);
+    	for (Product product : products) {
+    		int nQuantiry=getProductQuantityInCart(buyerEmail,product.getProductID());
+    		amt=amt + nQuantiry * product.getPrice();
+    	}
+    	
+    	return amt;
+    }
+    
+    public float getAmtInCart(String buyerEmail){
+    	float amt=0;
+    	List<String> owners=getMerchantsInCart(buyerEmail);
+    	
+    	for (String owner : owners) {
+    		amt=amt + getAmtByMerchantsInCart(buyerEmail, owner);
+    	}
+    	
+    	return amt;
+    } 
+    
+    
+   
+    public String getShippingCountry(String eamil){
+    	String country="";
+    	List<UserAddress> userAddresses=userAddressDao.findAllByEmail(eamil);
+    	
+    	if (userAddresses != null ) {
+    		User user=userDao.findByEmail(eamil);
+    		country= PaypalUtil.getCountryCode(userAddresses.get(0).getCountry());
+    	}
+    	if (country.equals("")) {
+    		User user = userDao.findByEmail(eamil);
+    		country=PaypalUtil.getCountryCode(user.getCountry());
+    		if (country.equals("")) {
+    			System.out.println("Failed to find user's country:" + eamil );
+    			country="CA";
+    		}
+    	}
+    	
+    	return country;
+
+    }
+    
+    public String getProvinceCode(String eamil){
+    	String province="";
+    	List<UserAddress> userAddresses=userAddressDao.findAllByEmail(eamil);
+    	
+    	if (userAddresses != null ) {
+    		User user=userDao.findByEmail(eamil);
+    		province= PaypalUtil.getCountryCode(userAddresses.get(0).getState());
+    	}
+    	if (province.equals("")) {
+    		User user = userDao.findByEmail(eamil);
+    		province=PaypalUtil.getCountryCode(user.getProvince());
+    		if (province.equals("")) {
+    			System.out.println("Failed to find user's province:" + eamil );
+    			province="ON";
+    		}
+    	}
+    	
+    	return province;
+
+    }   
+    
+    
+//	  /**
+//	   * Move a shopping cart to BuyerHistory table after a succesful payment transaction.
+//	   *
+//	   * @param productCartID the Shopping cart ID
+//	   * @param paras the parameters that we sent to paypal
+//	   * @param nvp the contents the got from PAYPAL's return during the first call
+//	   * @return TRUE if record added succesfully, otherwise FALSE
+//	   */
+//    public boolean addPayPalBuyerHistory(String buyerEmail, String paras, HashMap<String, String> nvp ){
+//    	boolean ret=false;
+//    	List<ShoppingCart> shoppingCarts = shoppingCartDao.findByBuyerEmail(buyerEmail);
+//    	try{
+//	    	for (ShoppingCart shoppingCart : shoppingCarts) {
+//
+//	    		BuyerHistory buyerHistory = new BuyerHistory();
+//	    		buyerHistory.setProductCartID(shoppingCart.getProductCartID());
+//	    		buyerHistory.setProductID(shoppingCart.getProductID());
+//	    		buyerHistory.setProductName(shoppingCart.getProductName());
+//	    		buyerHistory.setBuyerEmail(buyerEmail);
+//	    		buyerHistory.setCreateDate(new Date());
+//	    		buyerHistory.setQuantity((int)shoppingCart.getQuantity());
+//	    		buyerHistory.setProcessState("Order");
+//	    		buyerHistory.setTransactionID("");
+//	    		buyerHistory.setPayMethod("PayPal");
+//	    		buyerHistory.setPaypalAccount("");
+//	    		buyerHistory.setPaymentKey(nvp.get("TOKEN").toString());
+//	    		buyerHistoryDao.save(buyerHistory);
+//
+//	    		//Update shoppingcart status
+//	    		shoppingCart.setProcessState(true);
+//	    		shoppingCartDao.save(shoppingCart);
+//
+//	    		ret=true;
+//	    	}
+//    	}catch(Exception e){
+//    		log.error(e.getMessage());
+//    	}
+//    	return ret;
+//    }
+    
+	  /**
+	   * Add transaction record for paypal payment when got a token from paypal. Need to keep the transaction info
+	   * 
+	   * @param buyerEmail the buyer Shopping ID
+	   * @param paras the parameters that we sent to paypal
+	   * @param nvp the contents the got from PAYPAL's return during the first call
+	   * @return TRUE if record added succesfully, otherwise FALSE
+	   */     
+     public boolean addPayPalTransactionHistory(String buyerEmail, String paras, HashMap<String, String> nvp ){
+    	boolean ret=false;
+    	List<String> mechants = getMerchantsInCart(buyerEmail);
+    	List<ShoppingCart> shoppingCarts = shoppingCartDao.findByBuyerEmail(buyerEmail);
+    	int nIndex=0;
+    	try{
+	    	for (String mechant : mechants ) {
+	    		String sIndex = Integer.toString(nIndex);
+	    		TransactionHistory transactionHistory = new TransactionHistory();
+		    	transactionHistory.setProductCartID("");
+		    	transactionHistory.setTransactionID("");
+		    	transactionHistory.setBuyer(buyerEmail);
+		    	
+		    	Object amt=nvp.get("PAYMENTREQUEST_" + sIndex + "_AMT");
+		    	if ( amt != null ) {
+		    		transactionHistory.setTotalAmt(Float.parseFloat(amt.toString()));
+		    	}
+		    	
+		    	Object seller=nvp.get("PAYMENTREQUEST_" + sIndex + "_SELLERPAYPALACCOUNTID");
+		    	if ( seller != null ) {
+		    		transactionHistory.setSeller(seller.toString());
+		    	}
+	
+		    	Object payMethod = nvp.get("PAYMENTREQUEST_" + sIndex + "_SELLERPAYPALACCOUNTID");
+		    	if ( seller != null ) {
+		    		transactionHistory.setSeller(seller.toString());
+		    	}
+		    	
+		    	transactionHistory.setPayMethod("PayPal");
+		    	transactionHistory.setPaypalAccount(seller.toString());
+		    	transactionHistory.setPaymentKey(nvp.get("TOKEN").toString());
+		    	transactionHistory.setRequest(paras);
+		    	transactionHistory.setResponse(nvp.toString());
+		    	transactionHistory.setSTATUS("ORDER");
+		    	transactionHistory.setUpdated(new Date());
+		    	transactionHistory.setCreated(new Date());
+		    	transactionHistoryDao.save(transactionHistory);
+
+		    	nIndex=nIndex+1;
+	    	}
+	    	
+	    	ret=true;
+	    	
+    	}catch(Exception e){
+    		log.error(e.getMessage());
+    	}
+    	return ret;
+    }
+  
+	  /**
+	   * Add transaction record. No matter the transaction is succesfull or failed.
+	   * 
+	   * @param productCartID the Shopping cart ID
+	   * @param request the HttpServletRequest. Need to keep all return contents from Stripe/Paypal
+	   * @param response the HttpServletResponse. For future function extension
+	   * @return TRUE if record added succesfully, otherwise FALSE
+	   */    
+    public TransactionHistory addPayPalTransactionHistoryPostPay(String productCartID, String paymentType, String token, String buyer, String address, HttpServletRequest request,  HttpServletResponse response ){
+
+    	List<String> mechants = getMerchantsInCart(buyer);
+
+    	try{
+
+    		TransactionHistory transactionHistory = new TransactionHistory();
+	    	transactionHistory.setProductCartID(productCartID);
+	    	transactionHistory.setTransactionID(null);
+	    	transactionHistory.setBuyer(buyer);
+    		//transactionHistory.setTotalAmt(0);
+    		transactionHistory.setSeller(mechants.get(0));
+	    	transactionHistory.setPayMethod(paymentType);
+	    	transactionHistory.setPaypalAccount("");
+	    	transactionHistory.setPaymentKey(token);
+	    	transactionHistory.setAddress(address);
+
+	    	if (request != null){
+	    		transactionHistory.setRequest(PaypalUtil.httpRequestDump(request));
+	    	}
+
+	    	if (response != null){
+	    		transactionHistory.setResponse(response.toString());
+	    	}
+
+	    	transactionHistory.setSTATUS("PAID");
+	    	transactionHistory.setUpdated(new Date());
+	    	transactionHistory.setCreated(new Date());
+
+	    	transactionHistoryDao.save(transactionHistory);
+
+	    	transactionHistory = new TransactionHistory();
+	    	transactionHistory = transactionHistoryDao.findByPaymentKey(token);
+	    	transactionHistory.setTransactionID("FU_"+String.format("%010d",transactionHistory.getId()));
+	    	transactionHistoryDao.save(transactionHistory);
+
+	    	return transactionHistory;
+
+    	}catch(Exception e){
+    		log.error(e.getMessage());
+    		System.out.println("===============Error===============");
+    		return null;
+    	}
+
+    }
+
+  /**
+   * Move a shopping cart to BuyerHistory table after a succesful payment transaction.
+   * 
+   * @param productCartID the Shopping cart ID
+//   * @param paras the parameters that we sent to paypal
+//   * @param nvp the contents the got from PAYPAL's return during the first call
+   * @return TRUE if record added succesfully, otherwise FALSE
+   */    
+public boolean addBuyerHistoryForStripe(String productCartID, String processState, String transactionID, String paymentToken, String address){
+	boolean ret=false;
+
+	ShoppingCart shoppingCart = shoppingCartDao.findByProductCartID(productCartID);
+	try{
+
+    		BuyerHistory buyerHistory = new BuyerHistory();
+    		buyerHistory.setProductCartID(productCartID);
+    		buyerHistory.setProductID(shoppingCart.getProductID());
+    		buyerHistory.setProductName(shoppingCart.getProductName());
+    		buyerHistory.setBuyerEmail(shoppingCart.getBuyerEmail());
+    		buyerHistory.setCreateDate(shoppingCart.getCreateDate());
+    		buyerHistory.setPaidAt(new Date()); 
+    		buyerHistory.setQuantity((int)shoppingCart.getQuantity());
+    		buyerHistory.setProcessState(processState);
+    		buyerHistory.setTransactionID(transactionID);
+    		buyerHistory.setPayMethod("Stripe");
+    		buyerHistory.setPaymentKey(paymentToken);
+    		buyerHistory.setAddress(address);
+    		buyerHistoryDao.save(buyerHistory);
+    		
+    		SellerHistory sellerHistory = new SellerHistory(); 		
+    		sellerHistory.setProductCartID(productCartID);
+    		sellerHistory.setProductID(shoppingCart.getProductID());
+    		sellerHistory.setProductName(shoppingCart.getProductName());
+    		sellerHistory.setBuyerEmail(shoppingCart.getBuyerEmail());
+    		sellerHistory.setCreateDate(shoppingCart.getCreateDate());
+    		sellerHistory.setPaidAt(new Date()); 
+    		sellerHistory.setQuantity((int)shoppingCart.getQuantity());
+    		sellerHistory.setProcessState("ordered");
+    		sellerHistory.setTransactionID(transactionID);
+    		sellerHistory.setPayMethod("Stripe");
+    		sellerHistory.setPaymentKey(paymentToken);
+    		sellerHistory.setAddress(address);
+    		sellerHistory.setCarrier(null);
+    		sellerHistory.setTrackingNumber(null);
+    		sellerHistoryDao.save(sellerHistory);  		 		
+
+    	ret=true;
+	}catch(Exception e){
+		log.error(e.getMessage());
+	}
+	return ret;
+}
+
+
+   public String getPayPalAccount( String productID ) {
+	   Product product = productDao.findByProductID( productID );	  	   
+	   if ( product != null ) {		   
+		   String owner = product.getOwner();		   
+		   if ( owner != null ) {
+			   User user = userDao.findByEmail( owner );
+			   if ( user != null ) {
+				   return user.getPaypalAccount();
+			   }
+		   }
+	   }
+	   
+	   return "";
+   }	   
+ 
+   
+   public boolean sendEmailToBuyer_org(String buyerEmail)  {
+	   boolean ret=false;
+	   
+	   System.out.println("---------"+buyerEmail+"---------");
+	   
+	   List<ShoppingCart> shoppingCarts = shoppingCartDao.findByBuyerEmail(buyerEmail);
+	   
+	   System.out.println("---------"+shoppingCarts.toString()+"---------");
+	   
+	   MimeMessage mimeMessage = javaMailSender.createMimeMessage();
+	   
+	   String sOrderDetails= "<head><style>";
+	   sOrderDetails=sOrderDetails + " table, th, td {";
+	   sOrderDetails=sOrderDetails + " border: 1px solid black;";
+	   sOrderDetails=sOrderDetails + " border-collapse: collapse;";
+	   sOrderDetails=sOrderDetails + " }";
+	   sOrderDetails=sOrderDetails + " th, td {";
+	   sOrderDetails=sOrderDetails + "     padding: 5px;";
+	   sOrderDetails=sOrderDetails + " }";
+	   sOrderDetails=sOrderDetails + " </style>";
+	   sOrderDetails=sOrderDetails + " </head>";
+
+	   sOrderDetails=sOrderDetails + "<table>";
+	   sOrderDetails=sOrderDetails + "<tr><th></th><th>ProductName</th><th>Quantity</th><th>UnitPrice</th><th>ProductTotal</th></tr>";
+	   
+	   for ( ShoppingCart shoppingCart :shoppingCarts )  {
+		   String productID = shoppingCart.getProductID();
+		   Product p = productDao.findByProductID(productID);
+		   float amt = p.getPrice() * shoppingCart.getQuantity();
+		   sOrderDetails=sOrderDetails + "<tr>";
+		   sOrderDetails=sOrderDetails + "<td><img style=\"height: 50px; width: 80px\" src=\"https://s3-us-west-2.amazonaws.com/com.futrena/" + p.getProductID() +"0.jpeg\"></td><td>" + p.getProductName() + "</td>" ;
+		   sOrderDetails=sOrderDetails + "<td>" + String.valueOf(shoppingCart.getQuantity()) + "</td><td>" + String.valueOf(p.getPrice()) + "</td>" ;
+		   sOrderDetails=sOrderDetails + "<td>" + String.valueOf(amt) + "</td>";
+		   sOrderDetails=sOrderDetails + "</tr>";
+	   }
+	   
+	   //sOrderDetails=sOrderDetails + "<tr><td>Total</td><td colspan=4>" + String.valueOf(this.getAmtInCart(buyerEmail)) + "</td></tr>";
+	   sOrderDetails=sOrderDetails + "</table>";
+ 
+        try{
+     	    //Send email to buyer
+        	MimeMessageHelper helper = new MimeMessageHelper( mimeMessage, false, "utf-8");
+	        String html="Hi there,<br>You have ordered following products :<br>";
+	        html = sOrderDetails;
+	        html = html + "<br/><br/>Thank you.<br/>";
+	        html = html + "<br/><br/>Futrena Technology Inc.<br/>";
+	        mimeMessage.setContent(html, "text/html");
+	        helper.setTo(buyerEmail);
+	        helper.setSubject("Order Information");
+	        helper.setFrom("dblitest@gmail.com");
+	        javaMailSender.send(mimeMessage);
+	        
+        }catch(Exception e){
+        	log.error(e.getStackTrace());
+        	//System.out.println(e.getStackTrace());        	
+        }
+
+        return ret;
+   }
+   
+  public boolean sendEmailToSeller(String cartItemId, String buyerEmail)  {
+	   boolean ret=false;
+	   
+	   String owner = null;
+	   
+	   ShoppingCart shoppingCart = shoppingCartDao.findByProductCartID(cartItemId);
+	   
+	   MimeMessage mimeMessage = javaMailSender.createMimeMessage();
+	   
+	   String sOrderDetails= "<head><style>";
+	   sOrderDetails=sOrderDetails + " table, th, td {";
+	   sOrderDetails=sOrderDetails + " border: 1px solid black;";
+	   sOrderDetails=sOrderDetails + " border-collapse: collapse;";
+	   sOrderDetails=sOrderDetails + " }";
+	   sOrderDetails=sOrderDetails + " th, td {";
+	   sOrderDetails=sOrderDetails + " padding: 5px;";
+	   sOrderDetails=sOrderDetails + " }";
+	   sOrderDetails=sOrderDetails + " </style>";
+	   sOrderDetails=sOrderDetails + " </head>";
+	   sOrderDetails=sOrderDetails + "<table>";
+	   sOrderDetails=sOrderDetails + "<tr><th></th><th>ProductName</th><th>Quantity</th><th>UnitPrice</th><th>ProductTotal</th></tr>";
+	   
+
+	   String productID = shoppingCart.getProductID();
+	   Product p = productDao.findByProductID(productID);
+	   owner = p.getOwner();
+	   float amt = p.getPrice() * shoppingCart.getQuantity();
+	   sOrderDetails=sOrderDetails + "<tr>";
+	   sOrderDetails=sOrderDetails + "<td><img style=\"height: 50px; width: 80px\" src=\"https://s3-us-west-2.amazonaws.com/com.futrena/" + p.getProductID() +"0.jpeg\"></td><td>" + p.getProductName() + "</td>" ;
+	   sOrderDetails=sOrderDetails + "<td>" + String.valueOf(shoppingCart.getQuantity()) + "</td><td>" + String.valueOf(p.getPrice()) + "</td>" ;
+	   sOrderDetails=sOrderDetails + "<td>" + String.valueOf(amt) + "</td>";
+	   sOrderDetails=sOrderDetails + "</tr>";
+
+	   sOrderDetails=sOrderDetails + "</table>";
+ 
+        try{
+     	    //Send email to seller
+        	MimeMessageHelper helper = new MimeMessageHelper( mimeMessage, false, "utf-8");
+	        String html="Hi there,<br>You have ordered following products from " + owner + ":<br>";
+
+        	helper = new MimeMessageHelper( mimeMessage, false, "utf-8");
+	        html="Hi there,<br> Your Product has been sold:<br>";
+	        html = sOrderDetails;
+	        html = html + "<br/><br/>Thank you.<br/>";
+	        html = html + "<br/><br/>Futrena Technology Inc.<br/>";
+	        mimeMessage.setContent(html, "text/html");
+	        helper.setTo(owner);
+	        helper.setSubject("Your Product has been sold");
+	        helper.setFrom("dblitest@gmail.com");
+	        javaMailSender.send(mimeMessage);
+	        ret=true;
+	        
+        }catch(Exception e){
+        	log.error(e.getStackTrace());
+        	//System.out.println(e.getStackTrace());        	
+        }
+
+        return ret;
+   }
+   
+  	//Need the buyer infor - country, province and amount
+	public TaxRequest getTax(String buyerCountry, String buyerState, float amount ){
+		TaxRatio taxRatio = null;
+		TaxRequest tax = new TaxRequest();
+		String buyerCountryCode=PaypalUtil.getCountryCode(buyerCountry);
+		
+		tax.setTotal(PaypalUtil.MoneyFormat(amount));
+		tax.setGst("");
+		tax.setPst("");
+		tax.setHst("");
+		tax.setTaxTotal("");
+		
+		if (   buyerCountryCode.equals("CA") ) {
+			tax.setProvince(buyerState);
+			try
+			{
+				String provinceCode=PaypalUtil.getProvinceCode(buyerState);
+				if ( !provinceCode.equals("") )  {
+					taxRatio = taxRatioDao.findByProvince(provinceCode);
+					tax.setProvince(provinceCode);				
+					tax.setGst(PaypalUtil.MoneyFormat(taxRatio.getGst() * amount/100));
+					tax.setPst(PaypalUtil.MoneyFormat(taxRatio.getPst() * amount/100));
+					tax.setHst(PaypalUtil.MoneyFormat(taxRatio.getHst() * amount/100));
+					tax.setTaxTotal(PaypalUtil.MoneyFormat(taxRatio.getTotal() * amount/100));
+					tax.setTotal(PaypalUtil.MoneyFormat( amount * (1 + taxRatio.getTotal()/100 )));
+				}
+			}
+			catch (Exception ex){
+				return tax;
+			}
+		}
+		
+		return tax;
+	}
+
+	//false -> No need to conside the tax issue as buyer or seller is not Canadian
+	//true -> Need to conside the tax issue as buyer and seller are Canadian
+	public boolean IsThereTaxIssue(String sellerEmail,UserAddress buyerAddress){
+		User seller=userDao.findByEmail(sellerEmail);
+		if (buyerAddress==null || buyerAddress==null ) return false;	
+		
+		String buyerCountryCode=PaypalUtil.getCountryCode(buyerAddress.getCountry());
+		String sellerCountryCode=PaypalUtil.getCountryCode(seller.getCountry());
+		if (sellerCountryCode==null || sellerCountryCode==null) return false;
+		if (buyerCountryCode.equalsIgnoreCase("CA") && sellerCountryCode.equalsIgnoreCase("CA")) {
+			return true;
+		}
+		
+		return false;
+	}
+	
+	public String sendEmailToBuyer(String email){
+		boolean ret = false;
+		MimeMessage mimeMessage = javaMailSender.createMimeMessage();
+		String html=getInvoiceBody(email);
+
+	    if (html.length() < 400 ) {
+	    	return "Failed to create the invoice for " + email;
+	    }
+
+	    System.out.println(html);
+		try {
+			MimeMessageHelper helper = new MimeMessageHelper(mimeMessage,false, "utf-8");
+			mimeMessage.setContent(html, "text/html");
+			helper.setTo(email);
+			helper.setSubject("About Your Order in www.futrena.com");
+			helper.setFrom("dblitest@gmail.com");
+			javaMailSender.send(mimeMessage);
+
+			return html;
+
+		} catch (Exception e) {
+			System.out.println(e.getStackTrace());
+		}
+		return "Failed to send email to " + email;
+	}
+	
+	public String getInvoiceBody(String buyerEmail) {
+
+		String html="";
+		List<ShoppingCart> shoppingCarts = shoppingCartDao.findByBuyerEmail(buyerEmail);
+		BuyerHistory buyer = new BuyerHistory();
+		
+		if (shoppingCarts.get(0).getProductCartID() !=null) { 
+			List<BuyerHistory> buyerHistories = buyerHistoryDao.findByProductCartID(shoppingCarts.get(0).getProductCartID() );
+			if ( buyerHistories.size() > 0 ) {
+				buyer= buyerHistories.get(0);
+			}else{
+				System.out.println("Error, Can not find BuyerHistory for ShoppingCart:" + shoppingCarts.get(0).getProductCartID());
+			}
+		}
+
+		UserAddress address;
+		String jsonAddress=buyer.getAddress();
+		if (jsonAddress==null || jsonAddress.length() < 10 ) {
+			System.out.println("Error, can not find the address from BuyerHistory for " + buyerEmail);		
+			List<UserAddress> addresses =userAddressDao.findAllByEmail(buyerEmail);
+			if (addresses != null) {
+				address=addresses.get(0);
+			}else{
+				System.out.println("Error, can not find the address from UserAddress for " + buyerEmail);	
+				return "Error, can not find the address from UserAddress for " + buyerEmail;
+			}
+				
+		}else {
+			//String jsonAddress=" {\"id\":1,\"addressId\":\"f0690f48-d84a-4ba1-a079-1f8435c33c70\",\"email\":\"york9715@gmail.com\",\"address\":\"4711 Yonge St.\",\"phone\":\"6478328293\",\"city\":\"Toronto\",\"country\":\"Canada\",\"state\":\"Ontario\",\"postal\":\"m2j3j2\",\"firstName\":\"Hao\",\"lastName\":\"Qiao\",\"$$hashKey\":\"object:7\"}";
+			log.debug(jsonAddress);
+		
+			Gson gson = new Gson();
+			address = gson.fromJson(jsonAddress, UserAddress.class);
+		}
+		
+		String html_head=CreateInvoiceEmailHead();
+		String html_detail=CreateInvoiceEmailDetail2(address,buyerEmail);
+		String html_foot=CreateInvoiceEmailFoot();
+	
+		html=Replace(html_head,shoppingCarts.get(0),address, buyer);
+		html=html + html_detail;
+		html =html + html_foot;
+		
+		return html;
+
+	}
+
+   
+	public String Replace(String htmlIn,ShoppingCart shoppingCart, UserAddress address,BuyerHistory buyer){
+		DateFormat dateFormat = new SimpleDateFormat("yyyy/MM/dd HH:mm:ss");
+		Date date = new Date();
+		System.out.println(dateFormat.format(date));
+		
+		String html=htmlIn;
+		Date d= buyer.getCreateDate();
+		if (d==null) d= new Date();
+		
+		html=html.replace("{{user.name}}", PaypalUtil.toString(address.getFirstName()) + " " + PaypalUtil.toString(address.getLastName()));
+		
+		html=html.replace("{{order.num}}", PaypalUtil.toString(buyer.getTransactionID()));
+		html=html.replace("{{order.date}}", PaypalUtil.toString(dateFormat.format(d)));
+		html=html.replace("{{address.address1}}", PaypalUtil.toString(address.getAddress()));
+		html=html.replace("{{address.city}}", PaypalUtil.toString(address.getCity()));
+		html=html.replace("{{address.state}}", PaypalUtil.toString(address.getState()));
+		html=html.replace("{{address.postcode}}", PaypalUtil.toString(address.getPostal()));
+		html=html.replace("{{address.country}}", PaypalUtil.toString(address.getCountry()));
+		html=html.replace("{{address.phone}}", PaypalUtil.toString(address.getPhone()));
+			
+		return html;
+		
+	}
+	public String CreateInvoiceEmailHead(){
+		String head="";
+		head=head + "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\">";
+		head=head + "<html xmlns=\"http://www.w3.org/1999/xhtml\">";
+		head=head + "<head>";
+		head=head + "<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />";
+		head=head + "<title>Futrena.com</title>";
+		head=head + "<style type=\"text/css\">";
+		head=head + "#outlook a {";
+		head=head + "	padding: 0;";
+		head=head + "}";
+		head=head + "body {";
+		head=head + "	width: 100% !important;";
+		head=head + "}";
+		head=head + ".ReadMsgBody {";
+		head=head + "	width: 100%;";
+		head=head + "}";
+		head=head + ".ExternalClass {";
+		head=head + "	width: 100%;";
+		head=head + "}";
+		head=head + "body {";
+		head=head + "	-webkit-text-size-adjust: none;";
+		head=head + "	-ms-text-size-adjust: none;";
+		head=head + "}";
+		head=head + "body {";
+		head=head + "	margin: 0;";
+		head=head + "	padding: 0;";
+		head=head + "	font-family: Arial, sans-serif;";
+		head=head + "	font-size: 12px;";
+		head=head + "}";
+		head=head + "img {";
+		head=head + "	height: auto;";
+		head=head + "	line-height: 100%;";
+		head=head + "	outline: none;";
+		head=head + "	text-decoration: none;";
+		head=head + "	border: none;";
+		head=head + "	display: block;";
+		head=head + "}";
+		head=head + "#backgroundTable {";
+		head=head + "	height: 100% !important;";
+		head=head + "	margin: 0;";
+		head=head + "	padding: 0;";
+		head=head + "	width: 100% !important;";
+		head=head + "	background: #FFFFFF !important;";
+		head=head + "}";
+		head=head + "table td {";
+		head=head + "	border-collapse: collapse;";
+		head=head + "}";
+		head=head + ".gray .yshortcuts {";
+		head=head + "	color: #CCCCCC;";
+		head=head + "	border-bottom: none !important;";
+		head=head + "}";
+		head=head + ".white .yshortcuts {";
+		head=head + "	color: #FFFFFF;";
+		head=head + "	border-bottom: none !important;";
+		head=head + "}";
+		head=head + ".blue .yshortcuts {";
+		head=head + "	color: #005599;";
+		head=head + "	border-bottom: none !important;";
+		head=head + "}";
+  		head=head + ".red .yshortcuts {";
+  		head=head + "	color: #a00000;";
+  		head=head + "	border-bottom: none !important;";
+  		head=head + "}";
+  		head=head + ".black .yshortcuts {";
+  		head=head + "	color: #000000;";
+  		head=head + "	border-bottom: none !important;";
+  		head=head + "}";
+  		head=head + "</style>";
+  		head=head + "</head>";
+  		head=head + "";
+  		head=head + "<body bgcolor=\"#FFFFFF\">";
+  		head=head + "<table id=\"backgroundTable\" border=\"0\" cellspacing=\"0\" cellpadding=\"0\" width=\"100%\" align=\"center\">";
+  		head=head + "<tr>";
+  		head=head + "<td style=\"background:#FFFFFF; padding:10px;\">";
+  		head=head + "";
+  		head=head + "<!-- Header -->";
+
+		      
+  		head=head + "<table border=\"0\" cellspacing=\"0\" cellpadding=\"0\" align=\"center\">";
+  		head=head + "<tr>";
+  		head=head + "<td width=\"600\">";
+  		head=head + "<table border=\"0\" cellspacing=\"0\" cellpadding=\"0\" width=\"100%\">";
+  		head=head + "<tr>";
+  		head=head + "<td style=\"padding:25px 0px 10px; font-family:Arial, sans-serif; font-size:12px; color:#666666;\" align=\"left\"><font style=\"font-size:20px; font-weight:bold; color:#333333;\">Thank you for your order!</font> <br />";
+  		head=head + "                  <br />";
+		head=head + "                  <font style=\"font-size:18px; color:#333333;\">Dear {{user.name}},</font> <br />";
+		head=head + "                  Your order has been received and is being reviewed for processing. ";
+		head=head + "</td>";
+		head=head + "</tr>";
+  		head=head + "</table>";
+  		head=head + "</td>";
+  		head=head + "</tr>";
+  		head=head + "<tr>";
+  		head=head + "<td width=\"600\">";
+		head=head + "<table border=\"0\" cellspacing=\"0\" cellpadding=\"0\" width=\"100%\">";
+		head=head + "<tr>";
+  		head=head + "<td>";
+  		head=head + "<table border=\"0\" cellspacing=\"0\" cellpadding=\"0\" width=\"100%\">";
+  		head=head + "<tr>";
+  		head=head + "<td>";
+  		head=head + "<table border=\"0\" cellspacing=\"0\" cellpadding=\"0\" width=\"100%\">";
+  		head=head + "<tr>";
+  		head=head + "<td style=\"padding:10px 0; font-family:Arial, sans-serif; font-size:14px; color:#333333;\" align=\"left\"> Order Number: <b>{{order.num}}</b><br />";
+  		head=head + "                              Order Date: <b>{{order.date}}</b></td>";
+		head=head + "</tr>";
+  		head=head + "</table>";
+  		head=head + "</td>";
+  		head=head + "</tr>";
+  		head=head + "<tr>";
+  		head=head + "<td width=\"600\" height=\"2\"><img style=\"display:block;\" src=\"https://www.futrena.com:443/images/hr-cp.jpg\" border=\"0\" alt=\"\" width=\"600\" height=\"2\" /></td>";
+  		head=head + "</tr>";
+  		head=head + "<tr>";
+  		head=head + "<td style=\"line-height:18px; background:#efefef; padding:10px 0;\" align=\"center\">";
+  		head=head + "<table border=\"0\" cellspacing=\"0\" cellpadding=\"0\" width=\"100%\">";
+  		head=head + "<tr>";
+  		head=head + "<td style=\"padding-left:10px; font-family:Arial, sans-serif; font-size:12px; color:#222222;\" width=\"35%\" align=\"left\" valign=\"top\"> Shipping Address:<br />";
+  		head=head + "                              <b>  {{user.name}}<br />";
+		head=head + "                               {{address.address1}},  <br />";
+		head=head + "                              {{address.city}}, {{address.state}} {{address.postcode}}, {{address.country}}<br />";
+		head=head + "                              </b> Phone Number:<br />";
+		head=head + "                              <b>{{address.phone}}</b></td>";
+  		head=head + "</tr>";
+		head=head + "</table>";
+		head=head + "</td>";
+		head=head + "</tr>";
+		head=head + "</table>";
+		head=head + "</td>";
+		head=head + "</tr>";
+		head=head + "</table>";
+		head=head + "</td>";
+		head=head + "</tr>";
+		head=head + "<tr>";
+		head=head + "<td style=\"padding-bottom:10px;\" width=\"600\">";
+		head=head + "<table border=\"0\" cellspacing=\"0\" cellpadding=\"0\" width=\"100%\">";
+		head=head + "<tr>";
+		//head=head + "<td style=\"padding-top:10px;\">";
+
+		return head;
+	}
+   
+	 public String CreateInvoiceEmailDetail2(UserAddress address,String buyerEmail)  {
+		
+		//String buyerEmail = address.getEmail();
+		
+		List<ShoppingCart> shoppingCarts = shoppingCartDao.findByBuyerEmail(buyerEmail);
+		
+		String sOrderDetails="";
+		sOrderDetails=sOrderDetails + "<table border=\"0\" cellspacing=\"0\" cellpadding=\"0\" width=\"100%\">";
+		sOrderDetails=sOrderDetails + "<tr>";
+		sOrderDetails=sOrderDetails + "<td>";
+		sOrderDetails=sOrderDetails + "<table border=\"0\" cellspacing=\"0\" cellpadding=\"0\" width=\"100%\">";
+		sOrderDetails=sOrderDetails + "<tr>";
+		sOrderDetails=sOrderDetails + "<td style=\"padding:10px 0; font-family:Arial, sans-serif; font-size:18px; color:#333333;\" align=\"left\">Order Details</td>";
+		sOrderDetails=sOrderDetails + "</tr>";
+		sOrderDetails=sOrderDetails + "</table>";
+		sOrderDetails=sOrderDetails + "</td>";
+		sOrderDetails=sOrderDetails + "</tr>";
+		sOrderDetails=sOrderDetails + "<tr>";
+		sOrderDetails=sOrderDetails + "<td width=\"600\" height=\"2\"><img style=\"display: block; width: 600px; height: 2px;\" src=\"https://www.futrena.com:443/images/hr-cp.jpg\" border=\"0\" alt=\"\" width=\"600\" height=\"2\" /></td>";
+		sOrderDetails=sOrderDetails+ "</tr>";
+		sOrderDetails=sOrderDetails + "<tr>";
+		sOrderDetails=sOrderDetails + "<td style=\"line-height:16px; padding:10px 0; border-bottom:solid 1px #dddddd;\" align=\"center\">";
+		
+		sOrderDetails=sOrderDetails + "<table border=\"0\" cellspacing=\"0\" cellpadding=\"0\" width=\"100%\">";
+		sOrderDetails=sOrderDetails + "<tr>";
+		sOrderDetails=sOrderDetails + "<td style=\"font-family:Arial, sans-serif; font-size:12px; color:#222222;\"  align=\"left\" valign=\"top\">";
+		sOrderDetails=sOrderDetails + "<b>";		
+
+		//sOrderDetails = sOrderDetails + " </style>";
+		sOrderDetails = sOrderDetails + "<tr style='border: 1px solid black;'><th style='border: 1px solid black;'></th><th style='border: 1px solid black;'>ProductName</th><th style='border: 1px solid black;'>Quantity</th><th style='border: 1px solid black;'>UnitPrice</th>";
+		//sOrderDetails = sOrderDetails + "<th style='border: 1px solid black;'>ProductTotal</th>";
+		sOrderDetails = sOrderDetails + "<th style='border: 1px solid black;'>Shipping</th><th style='border: 1px solid black;'>Tax</th><th style='border: 1px solid black;'>Total</th></tr>";
+		
+		float totalTax = 0; 
+		float totalAmt = 0;
+		float totalShipping = 0;
+		float totalPackaging = 0;
+		float totalAmtIncTax = 0;
+		float totalBeforTax = 0;
+		for ( ShoppingCart shoppingCart :shoppingCarts )  {
+			String productID = shoppingCart.getProductID();
+			TaxRequest2 taxRequest2 = GetTotalAmtPerProductInCart(address, productID,buyerEmail);
+			float shippingAmt = GetShippingFee(address, productID,shoppingCart.getQuantity());
+			Product p = productDao.findByProductID(productID);
+			String sellerEmail = p.getOwner();
+			if (sellerEmail == null) sellerEmail = p.getDesigner();
+			if (sellerEmail.equals("")) sellerEmail = p.getDesigner();
+			boolean taxIssue = IsThereTaxIssue( sellerEmail, address );
+			
+			totalShipping = totalShipping + shippingAmt;
+			
+			float amt = p.getPrice() * shoppingCart.getQuantity();
+			totalAmt = totalAmt + amt;
+			totalBeforTax=totalBeforTax + amt + shippingAmt;
+			totalAmtIncTax=totalAmtIncTax + taxRequest2.getTotalIncTax();
+			
+			sOrderDetails=sOrderDetails + "<tr style='border: 1px solid black;'>";
+			sOrderDetails=sOrderDetails + "<td style='border: 1px solid black;'><img style=\"height: 50px; width: 80px\" src=\"https://s3-us-west-2.amazonaws.com/com.futrena/" + p.getProductID() +"0.jpeg\"></td><td style='border: 1px solid black;'>" + p.getProductName() + "</td>" ;
+			
+			if (taxIssue && p.getTaxFlag() != 1)
+				sOrderDetails=sOrderDetails + "<td style='border: 1px solid black;'>" + String.valueOf(shoppingCart.getQuantity()) + "</td><td style='border: 1px solid black;'>" + PaypalUtil.MoneyFormat(p.getPrice()) + " (Inc. Tax)</td>" ;
+			else {
+				sOrderDetails=sOrderDetails + "<td style='border: 1px solid black;'>" + String.valueOf(shoppingCart.getQuantity()) + "</td><td style='border: 1px solid black;'>" + PaypalUtil.MoneyFormat(p.getPrice()) + "</td>" ;
+			}
+			
+			//sOrderDetails=sOrderDetails + "<td style='border: 1px solid black;'>" + PaypalUtil.MoneyFormat(taxRequest2.getTotalBeforeTax()) + "</td>";
+			sOrderDetails=sOrderDetails + "<td style='border: 1px solid black;'>" + PaypalUtil.MoneyFormat(taxRequest2.getShipping()) + "</td>" ;
+			sOrderDetails=sOrderDetails + "<td style='border: 1px solid black;'>" + PaypalUtil.MoneyFormat(taxRequest2.getTaxTotal()) + "</td>" ;
+			
+			if ( taxIssue && p.getTaxFlag() == 1) {
+				totalTax = totalTax + taxRequest2.getTaxTotal();
+			}
+
+			sOrderDetails=sOrderDetails + "<td style='border: 1px solid black;'>" + PaypalUtil.MoneyFormat(taxRequest2.getTotalIncTax()) + "</td>";
+			sOrderDetails=sOrderDetails + "</tr>";
+		}
+
+		sOrderDetails=sOrderDetails + "<tr>";
+		sOrderDetails=sOrderDetails + "<table border=\"0\" cellspacing=\"10\" cellpadding=\"0\" width=\"100%\"> </table>";
+		sOrderDetails=sOrderDetails + "</tr>";
+		   
+		sOrderDetails=sOrderDetails + "<td style=\"font-family:Arial, sans-serif; font-size:12px; color:#222222; padding-bottom:5px;\" width=\"50%\" align=\"right\"> Sub Total:&nbsp;<br />";
+		sOrderDetails=sOrderDetails + "";                                    
+		sOrderDetails=sOrderDetails + "                                    Shipping:&nbsp;<br />";
+		sOrderDetails=sOrderDetails + " ";                                   
+		sOrderDetails=sOrderDetails + "                                    Handling:&nbsp;<br />";
+		if ( totalTax > 0 )
+			sOrderDetails=sOrderDetails + "                                    Tax:&nbsp;<br />";
+		
+		sOrderDetails=sOrderDetails + "                                    <font style=\"color:#a00000;\">Discount:&nbsp;</font><br />";
+		sOrderDetails=sOrderDetails + "                                    <font style=\"font-size:14px;\">Total&nbsp;</font> </td>";
+		sOrderDetails=sOrderDetails + "<td style=\"font-family:Arial, sans-serif; font-size:12px; color:#222222; padding-bottom:5px; font-weight:bold;\" width=\"50%\" align=\"right\">" + PaypalUtil.MoneyFormat( totalAmt) + "<br />";
+		sOrderDetails=sOrderDetails + "                                    " + PaypalUtil.MoneyFormat(totalShipping) + "<br />";
+		sOrderDetails=sOrderDetails + "                                    <br />";
+			
+		if ( totalTax > 0 )
+			sOrderDetails=sOrderDetails + "                                    " + PaypalUtil.MoneyFormat(totalTax ) + "<br />";
+		
+		sOrderDetails=sOrderDetails + "                                    <font style=\"color:#a00000;\"></font><br />";
+		sOrderDetails=sOrderDetails + "                                    <font style=\"font-size:14px;\">" + PaypalUtil.MoneyFormat(totalTax + totalAmt + totalShipping) + "</font> </td>";
+		sOrderDetails=sOrderDetails + "</tr>";
+		//sOrderDetails=sOrderDetails + "</table>";
+		   
+		return sOrderDetails;
+	 }
+
+
+	public String CreateInvoiceEmailFoot(){
+		String ret = "";
+		ret=ret + "</td>";
+		ret=ret + "</tr>";
+		ret=ret + "</table>";
+		ret=ret + "</td>";
+		ret=ret + "</tr>";
+		ret=ret + "</table>";
+		    
+		ret=ret + "<table border=\"0\" cellspacing=\"0\" cellpadding=\"0\" align=\"center\">";
+		ret=ret + "<tr>";
+		ret=ret + "<td width=\"600\"><!-- Create an Account -->";
+		ret=ret + "            <table border=\"0\" cellspacing=\"0\" cellpadding=\"0\" align=\"center\">";
+		ret=ret + "        <tr>";
+		ret=ret + "          <td width=\"600\" style=\"padding-bottom:5px;\">";
+		ret=ret + "          </td>";
+		ret=ret + "        </tr>";
+		ret=ret + "      </table> ";
+
+		ret=ret + "<table border=\"0\" cellspacing=\"0\" cellpadding=\"0\" align=\"center\">";
+		ret=ret + "<tr>";
+		ret=ret + "<td style=\"padding-bottom:5px;\" width=\"600\"> ";
+		ret=ret + "</td>";
+		ret=ret + "</tr>";
+		ret=ret + "</table>";
+		ret=ret + "<!-- End AutoMD --></td>";
+		ret=ret + "</tr>";
+		ret=ret + "</table>";
+		
+		
+		ret=ret + "<table border=\"0\" cellspacing=\"0\" cellpadding=\"0\" align=\"center\">";
+		ret=ret + "<tr>";
+		ret=ret + "<td width=\"600\">";
+		ret=ret + "<table border=\"0\" cellspacing=\"0\" cellpadding=\"0\" width=\"100%\">";
+		ret=ret + "<tr>";
+		ret=ret + "<td style=\"padding:10px 10px 20px;\" align=\"left\"> Thanks again for shopping with us. <br />";
+		ret=ret + "      <br />";
+		ret=ret + "      corporate@futrena.com </td>";
+		ret=ret + "</tr>";
+		ret=ret + "</table>";
+		ret=ret + "</td>";
+		ret=ret + "</tr>";
+		ret=ret + "</table>";
+		ret=ret + "";
+		ret=ret + "</body>";
+		ret=ret + "</html>";
+		
+		return ret;
+
+	}
+
+	//public float GetShippingFee(String buyerEmail, String productId, int quantity) {
+	public float GetShippingFee(UserAddress buyerAddress, String productId, long quantity) {
+		Product product = productDao.findByProductID( productId );
+		String countryCode = PaypalUtil.getCountryCode( buyerAddress.getCountry() );
+		
+		float shipping=0;
+		
+		if (product==null) return 0;
+		
+		if (countryCode.equalsIgnoreCase("CN")) 
+			shipping = product.getDeliveryFeeCH();
+		else if (countryCode.equalsIgnoreCase("US")) 
+			shipping = product.getDeliveryFeeUS();
+		else
+			shipping = product.getDeliveryFeeCA();
+		
+		return shipping * quantity;
+		
+	}
+
+
+    public TaxRequest2 GetTotalAmtPerProductInCart(UserAddress address, String productId, String buyerEmail){
+    	TaxRequest2 taxRequest2 = new TaxRequest2();
+    	//String buyerEmail=address.getEmail();
+    	float shipping = 0;
+    	float amtBeforeTax = 0;
+    	float packaging = 0;
+    	
+    	String buyerCountry = PaypalUtil.getCountryCode(address.getCountry());
+    	String provinceCode=PaypalUtil.getProvinceCode(address.getState());
+    	if ( buyerCountry.equalsIgnoreCase("CA") && provinceCode.equals("") ) 
+    		provinceCode="ON";
+    	System.out.println("buyerCountry=" + buyerCountry + ";provinceCode=" + provinceCode + ";buyerEmail=" + buyerEmail);
+    	ShoppingCart shoppingCart = shoppingCartDao.findByBuyerEmailAndProductID(buyerEmail, productId);	
+    	Product product =productDao.findByProductID(productId);
+    	taxRequest2.setProvince(provinceCode);
+    	
+    	if (shoppingCart != null && product != null) {
+    			
+    		String sellerEmail=product.getOwner();
+    		
+			if (sellerEmail==null ) sellerEmail="";
+			if (sellerEmail.equals("")) {
+				sellerEmail=product.getDesigner();
+			}
+			if (sellerEmail.equals("")) {
+				System.out.println("ERROR: failed to find email in product:" + productId);
+			}
+			
+			boolean taxIssue = IsThereTaxIssue(sellerEmail,address);
+			if (taxIssue) 
+				System.out.println("sellerEmail " + sellerEmail + " has tax issue.");
+			else
+				System.out.println("sellerEmail " + sellerEmail + " has no tax issue.");
+			
+			System.out.println(address.toString());
+			
+			int nQuantiry = getProductQuantityInCart( buyerEmail, product.getProductID() );
+			shipping=GetShippingFee(address, productId,nQuantiry);
+			//amtBeforeTax=(product.getPrice() + shipping + packaging) *  nQuantiry;
+			amtBeforeTax = product.getPrice() *  nQuantiry;
+			
+			if (taxIssue && product.getTaxFlag() == 1) {
+				System.out.println("getTaxFlag==1;buyerCountry=" + buyerCountry + ";provinceCode=" + provinceCode);
+				System.out.println("amtBeforeTax=" + amtBeforeTax);
+				TaxRequest taxRequest=getTax(buyerCountry, provinceCode, amtBeforeTax );
+				
+				taxRequest2.setGst(PaypalUtil.Convert2Money(taxRequest.getGst()));
+				taxRequest2.setPst(PaypalUtil.Convert2Money(taxRequest.getPst()));
+				taxRequest2.setHst(PaypalUtil.Convert2Money(taxRequest.getHst()));
+				taxRequest2.setShipping(shipping);
+				taxRequest2.setPackaging(packaging);
+				taxRequest2.setTaxTotal(PaypalUtil.Convert2Money(taxRequest.getTaxTotal()));
+				taxRequest2.setTotal( amtBeforeTax );
+				taxRequest2.setTotalBeforeTax( product.getPrice() *  nQuantiry + shipping );
+				taxRequest2.setTotalIncTax( product.getPrice() *  nQuantiry + shipping + PaypalUtil.Convert2Money(taxRequest.getTaxTotal()) );
+				return taxRequest2;
+			}else{
+				System.out.println("No tax");
+				taxRequest2.setShipping( shipping  );
+				taxRequest2.setPackaging(packaging);
+				taxRequest2.setTotal( product.getPrice() * nQuantiry  + shipping + packaging );
+				taxRequest2.setTotalBeforeTax( product.getPrice() * nQuantiry  + shipping + packaging );
+				taxRequest2.setTotalIncTax( product.getPrice() * nQuantiry  + shipping + packaging );
+			}
+    	}
+    	
+    	return taxRequest2;
+
+    } 
+
+}
