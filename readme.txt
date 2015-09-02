@@ -5,7 +5,7 @@ url=jdbc:mysql://localhost:3306/testdb
 username = york
 password = password
 
-### Data
+#test data2
 DROP TABLE usehistory;
 CREATE TABLE `usehistory` (
     `id` INT(6) UNSIGNED NOT NULL AUTO_INCREMENT,
